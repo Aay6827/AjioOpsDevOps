@@ -1,0 +1,108 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  REGION: asia-south1
+  SERVICE: ajio-order-service
+  IMAGE_NAME: ajio-order-service
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ajio
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: orders_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ajio -d orders_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Unit and API tests (SQLite in-memory)
+        run: pytest -q
+      - name: Smoke test against Postgres
+        env:
+          DATABASE_URL: postgresql+psycopg2://ajio:ci_password@localhost:5432/orders_test
+        run: |
+          uvicorn app.main:app --port 8000 &
+          for i in $(seq 1 20); do curl -sf localhost:8000/health && break || sleep 1; done
+          curl -sf -X POST localhost:8000/orders -H 'content-type: application/json' \
+            -d '{"customer_id":"ci","items":[{"sku":"AJ-TSHIRT-001","quantity":1}]}'
+          curl -sf localhost:8000/metrics | grep orders_placed_total
+
+  terraform-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - working-directory: terraform
+        run: |
+          terraform fmt -check
+          terraform init -backend=false
+          terraform validate
+
+  build:
+    needs: [test, terraform-validate]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t $IMAGE_NAME:${{ github.sha }} .
+      - name: Authenticate to GCP (Workload Identity Federation)
+        if: github.ref == 'refs/heads/main'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - name: Push to Artifact Registry
+        id: meta
+        if: github.ref == 'refs/heads/main'
+        run: |
+          gcloud auth configure-docker $REGION-docker.pkg.dev --quiet
+          IMAGE=$REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/ajio-ops/$IMAGE_NAME:${{ github.sha }}
+          docker tag $IMAGE_NAME:${{ github.sha }} $IMAGE
+          docker push $IMAGE
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - name: Deploy to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE }}
+          region: ${{ env.REGION }}
+          image: ${{ needs.build.outputs.image }}
+      - name: Post-deploy health check
+        run: |
+          URL=$(gcloud run services describe $SERVICE --region $REGION --format 'value(status.url)')
+          curl -sf "$URL/health"

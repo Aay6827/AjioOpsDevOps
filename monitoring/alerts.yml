@@ -1,0 +1,56 @@
+groups:
+  - name: order-service
+    rules:
+      - alert: OrderServiceDown
+        expr: up{job="ajio-order-service"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Order service is down"
+          description: "Prometheus cannot scrape the order service. Check container health and the database."
+
+      - alert: HighHttp5xxRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[2m]))
+            /
+          sum(rate(http_requests_total[2m])) > 0.05
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "More than 5% of requests are failing with 5xx"
+          description: "Check /orders errors, database connectivity and recent deploys."
+
+      - alert: HighOrderFailureRate
+        expr: |
+          sum(rate(orders_failed_total[5m]))
+            /
+          (sum(rate(orders_failed_total[5m])) + sum(rate(orders_placed_total[5m]))) > 0.10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 10% of order attempts are failing"
+          description: "Break down by reason: out_of_stock vs chaos_injected / dependency errors."
+
+      - alert: SlowOrderRequests
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket{path="/orders"}[2m])) by (le)
+          ) > 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 latency for POST /orders is above 1s"
+          description: "Look for slow database queries, connection pool exhaustion or noisy neighbours."
+
+      - alert: LowStockSKUs
+        expr: low_stock_skus > 0
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "One or more SKUs are below the reorder threshold"
+          description: "Restock via POST /inventory/restock or trigger purchasing."
