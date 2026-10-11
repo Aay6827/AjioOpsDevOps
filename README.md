@@ -1,3 +1,6 @@
+![CI](https://github.com/Aay6827/AjioOpsDevOps/actions/workflows/ci-cd.yml/badge.svg)
+
+
 # AjioOpsDevOps
 
 DevOps automation and cloud-native monitoring for an Ajio-style e-commerce order management and supply chain platform. Target role: **Junior DevOps Engineer**.
@@ -102,3 +105,5 @@ For CI, set these GitHub repository secrets: `GCP_PROJECT_ID`, `GCP_WORKLOAD_IDE
 - Add Cloud Monitoring alert policies in Terraform
 - Add canary or blue/green rollout with automatic rollback
 - Add load testing (k6 or Locust) as a CI stage
+
+
