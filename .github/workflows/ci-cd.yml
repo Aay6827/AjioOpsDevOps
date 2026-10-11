@@ -1,11 +1,13 @@
 name: CI/CD
+
 on:
-push:
-branches: [main]
-pull_request:
-branches: [main]
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
 env:
-REGION: asia-south1
+  REGION: asia-south1
   SERVICE: ajio-order-service
   IMAGE_NAME: ajio-order-service
 
