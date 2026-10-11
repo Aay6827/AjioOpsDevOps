@@ -1,13 +1,11 @@
 name: CI/CD
-
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-
+push:
+branches: [main]
+pull_request:
+branches: [main]
 env:
-  REGION: asia-south1
+REGION: asia-south1
   SERVICE: ajio-order-service
   IMAGE_NAME: ajio-order-service
 
@@ -61,6 +59,9 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      # GCP push and deploy only run once the GCP secrets have been added.
+      GCP_CONFIGURED: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' }}
     outputs:
       image: ${{ steps.meta.outputs.image }}
     steps:
@@ -68,14 +69,14 @@ jobs:
       - name: Build image
         run: docker build -t $IMAGE_NAME:${{ github.sha }} .
       - name: Authenticate to GCP (Workload Identity Federation)
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && env.GCP_CONFIGURED == 'true'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - name: Push to Artifact Registry
         id: meta
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && env.GCP_CONFIGURED == 'true'
         run: |
           gcloud auth configure-docker $REGION-docker.pkg.dev --quiet
           IMAGE=$REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/ajio-ops/$IMAGE_NAME:${{ github.sha }}
@@ -85,7 +86,8 @@ jobs:
 
   deploy:
     needs: build
-    if: github.ref == 'refs/heads/main'
+    # Skipped unless the build job pushed an image to GCP.
+    if: github.ref == 'refs/heads/main' && needs.build.outputs.image != ''
     runs-on: ubuntu-latest
     environment: production
     permissions:
